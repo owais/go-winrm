@@ -28,8 +28,8 @@ const shellUtilizationLogLevel = log.DebugLevel
 const logFieldLocalFile = "file"
 const logFieldCopyFileWorker = "worker"
 
-var regexpRemoteFileThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9]:(?:\\|(?:\\[a-zA-Z0-9-_\. ^&]+)+)$`)
-var regexpFileBasenameThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9-_\. ^&]+$`)
+var regexpRemoteFileThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9]:(?:\\|(?:\\[a-zA-Z0-9~-_\. ^&]+)+)$`)
+var regexpFileBasenameThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9~-_\. ^&]+$`)
 
 type copyFileTask struct {
 	LocalFile string
@@ -64,10 +64,10 @@ type FileTreeCopier struct {
 // NewFileTreeCopier creates a new file copier and guards against errorneous input. remoteRoot must be a cleaned absolute Windows file path
 // that starts with a drive letter.
 // Limitations:
-// 1. if localRoot is a regular file then the remote directory to which it would be copied must not contain an entry with a case-insensitive
-//    equal name.
-// 2. after cleaning localRoot (using filepath.Clean), it should not contain any characters outside the regular expression class [a-zA-Z0-9-_\. ^&],
-//    because escaping such file names is not supported.
+//  1. if localRoot is a regular file then the remote directory to which it would be copied must not contain an entry with a case-insensitive
+//     equal name.
+//  2. after cleaning localRoot (using filepath.Clean), it should not contain any characters outside the regular expression class [a-zA-Z0-9-_\. ^&],
+//     because escaping such file names is not supported.
 func NewFileTreeCopier(shells []*Shell, remoteRoot, localRoot string) (*FileTreeCopier, error) {
 	f := &FileTreeCopier{
 		localRoot:  localRoot,

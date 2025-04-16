@@ -11,8 +11,6 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf16"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // PowerShellSingleQuotedStringLiteral returns a string that is a valid single quoted string literal in PowerShell, that evaluates to the
@@ -108,7 +106,6 @@ func RunCommand(shell *Shell, command string, args []string, winrsConsoleModeStd
 			firstErrMutex.Unlock()
 		} else {
 			firstErrMutex.Unlock()
-			log.Error(err)
 		}
 	}
 	copyFunc := func(dst io.Writer, src io.Reader, name string) {

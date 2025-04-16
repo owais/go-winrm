@@ -18,18 +18,14 @@ import (
 	"time"
 
 	"github.com/karrick/godirwalk"
-	log "github.com/sirupsen/logrus"
 )
 
 const pipeHasEnded = "The pipe has been ended."
 const pipeIsBeingClosed = "The pipe is being closed."
 const parentPrefix = ".." + string(os.PathSeparator)
-const shellUtilizationLogLevel = log.DebugLevel
-const logFieldLocalFile = "file"
-const logFieldCopyFileWorker = "worker"
 
-var regexpRemoteFileThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9]:(?:\\|(?:\\[a-zA-Z0-9~-_\. ^&]+)+)$`)
-var regexpFileBasenameThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9~-_\. ^&]+$`)
+var regexpRemoteFileThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9]:(?:\\|(?:\\[a-zA-Z0-9-~_\. ^&]+)+)$`)
+var regexpFileBasenameThatDoesNotNeedEscaping = regexp.MustCompile(`^[a-zA-Z0-9-~_\. ^&]+$`)
 
 type copyFileTask struct {
 	LocalFile string
@@ -128,7 +124,6 @@ func newCopyFileWorker(f *FileTreeCopier, id int, shell *Shell) *copyFileWorker 
 }
 
 func (w *copyFileWorker) RunCommand(command string) error {
-	log.Tracef(command)
 	s := time.Now()
 	err := RunCommand(w.shell, command, nil, true, false)
 	w.shellUseTime += time.Since(s)
@@ -136,7 +131,6 @@ func (w *copyFileWorker) RunCommand(command string) error {
 }
 
 func (w *copyFileWorker) Run() {
-	startTime := time.Now()
 	for {
 		t, ok := <-w.f.copyFileTasks
 		if !ok {
@@ -144,21 +138,8 @@ func (w *copyFileWorker) Run() {
 		}
 		err := w.copyFile(t.LocalFile)
 		if err != nil {
-			log.WithFields(log.Fields{
-				log.ErrorKey:           err.Error(),
-				logFieldLocalFile:      t.LocalFile,
-				logFieldCopyFileWorker: w.id,
-			}).Errorf("copy file failed")
 			w.f.addError(err)
 		}
-	}
-	if log.IsLevelEnabled(shellUtilizationLogLevel) {
-		elapsedTime := time.Since(startTime)
-		elapsedSeconds := elapsedTime.Seconds()
-		shellUsePercentage := w.shellUseTime.Seconds() / elapsedSeconds * 100.0
-		log.StandardLogger().WithFields(log.Fields{
-			logFieldCopyFileWorker: w.id,
-		}).Logf(shellUtilizationLogLevel, "goroutine ran for %.2f seconds with a shell utilization of %.2f%%", elapsedSeconds, shellUsePercentage)
 	}
 }
 
@@ -190,9 +171,6 @@ func (f *FileTreeCopier) Run() error {
 	close(f.copyFileTasks)
 	// Signal to the goroutine running reportLoop that it can stop.
 	f.done <- struct{}{}
-	elapsedSeconds := time.Since(f.stats.startTime).Seconds()
-	overallBytesPerSecond := float64(f.stats.bytesCopied) / elapsedSeconds
-	log.Infof("copied file tree with %d errors in %2f seconds (upload speed = %s/s, total size = %s)", len(f.errors), elapsedSeconds, formatBytes(overallBytesPerSecond), formatBytes(float64(f.stats.bytesTotal)))
 	if len(f.errors) == 0 {
 		return nil
 	}
@@ -238,9 +216,6 @@ func (f *FileTreeCopier) scanDirs() {
 					if j >= 0 {
 						atomic.AddInt64(&f.stats.directoriesTotal, 1)
 						command := formatMakeDirectoryCommand(remoteFile[:i], true)
-						log.Info(localFile)
-						log.Info(remoteFile)
-						log.Info(command)
 						commandLength = copy(commandBuffer, command)
 						commandDirs++
 					} else {
@@ -303,18 +278,8 @@ outer:
 			break outer
 		case now := <-time.After(time.Second * 5):
 			bytesCopied := atomic.LoadInt64(&f.stats.bytesCopied)
-			bytesCopiedChange := bytesCopied - f.stats.lastReportBytesCopied
-			elapsedTime := now.Sub(f.stats.lastReportTime)
 			f.stats.lastReportBytesCopied = bytesCopied
 			f.stats.lastReportTime = now
-			bytesCopiedPerSecond := float64(bytesCopiedChange) / elapsedTime.Seconds()
-			progress := float64(bytesCopied) / float64(atomic.LoadInt64(&f.stats.bytesTotal)) * 100.0
-			log.Infof("stats: upload speed = %s/s, progress = %.1f%%, dirs = %d/%d",
-				formatBytes(bytesCopiedPerSecond),
-				progress,
-				atomic.LoadInt64(&f.stats.directoriesCreated),
-				atomic.LoadInt64(&f.stats.directoriesTotal),
-			)
 		}
 	}
 }
@@ -453,13 +418,7 @@ end {
 		defer wg.Done()
 		_, err = io.Copy(&stderr, cmd.Stderr)
 		if err != nil {
-			log.WithFields(log.Fields{
-				logFieldLocalFile:      localFile,
-				logFieldCopyFileWorker: w.id,
-				log.ErrorKey:           err.Error(),
-				LogFieldCommandID:      cmd.ID(),
-				"stderr":               stderr.String(),
-			}).Errorf("error while buffering stderr")
+			fmt.Printf("error while buffering stderr: %w - %s", err, stderr.String())
 			stderr.Reset()
 			atomic.StoreInt64(&gotError, 1)
 		}
@@ -479,56 +438,27 @@ end {
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			log.WithFields(log.Fields{
-				logFieldLocalFile:      localFile,
-				logFieldCopyFileWorker: w.id,
-				log.ErrorKey:           err.Error(),
-				LogFieldCommandID:      cmd.ID(),
-				"stdout":               stdout.String(),
-			}).Errorf("error while buffering stdout")
+			fmt.Printf("error while buffering stdout: %w - %s", err, stdout.String())
 			stdout.Reset()
 			atomic.StoreInt64(&gotError, 1)
 		}
 	}()
 	cmd.Wait()
 	if cmd.ExitCode() != 0 {
-		log.WithFields(log.Fields{
-			logFieldLocalFile:      localFile,
-			logFieldCopyFileWorker: w.id,
-			log.ErrorKey:           err.Error(),
-			LogFieldCommandID:      cmd.ID(),
-		}).Errorf("command exited with non-zero code %d", cmd.ExitCode())
 		atomic.StoreInt64(&gotError, 1)
 	}
 	wg.Wait()
 	w.shellUseTime += time.Since(commandStartTime)
 	if cmd.ExitCode() == 0 {
 		if sha256DigestRemote == "" {
-			log.WithFields(log.Fields{
-				logFieldLocalFile:      localFile,
-				logFieldCopyFileWorker: w.id,
-				LogFieldCommandID:      cmd.ID(),
-			}).Errorf("copy file command did not output the expected JSON to stdout but exited with code 0")
 			gotError = 1
 		} else if sha256DigestRemote != sha256DigestLocal {
-			log.WithFields(log.Fields{
-				logFieldLocalFile:      localFile,
-				logFieldCopyFileWorker: w.id,
-				LogFieldCommandID:      cmd.ID(),
-			}).Errorf("copy file checksum mismatch (local = %s, remote = %s)", sha256DigestLocal, sha256DigestRemote)
 			gotError = 1
 		}
 	}
 	if gotError == 0 {
 		return nil
 	}
-	log.WithFields(log.Fields{
-		logFieldLocalFile:      localFile,
-		logFieldCopyFileWorker: w.id,
-		LogFieldCommandID:      cmd.ID(),
-		"stdout":               stdout.String(),
-		"stderr":               stderr.String(),
-	}).Errorf("copy file command failed")
 	return fmt.Errorf("got errors while copying file (see logs)")
 }
 

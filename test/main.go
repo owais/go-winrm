@@ -5,39 +5,29 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/jbrekelmans/go-winrm"
-	log "github.com/sirupsen/logrus"
 )
 
 const defaultParallelism = 1
-const defaultLogLevel = log.InfoLevel
 
 func main() {
 	hostFlag := flag.String("host", "", "")
 	portFlag := flag.String("port", "5986", "")
 	userFlag := flag.String("user", "", "")
-	logLevelFlag := flag.String("log-level", defaultLogLevel.String(), "")
 	passwordFlag := flag.String("password", "", "")
 	parallelismFlag := flag.String("parallelism", strconv.Itoa(defaultParallelism), "")
 	flag.Parse()
-	logLevel, err := log.ParseLevel(*logLevelFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing log level: %v", err)
-		os.Exit(1)
-	}
-	log.SetOutput(os.Stdout)
-	log.SetLevel(logLevel)
 	port, err := strconv.Atoi(*portFlag)
 	if err != nil {
-		log.Fatalf("error parsing port: %v", err)
+		fmt.Printf("error parsing port: %v\n", err)
 	}
 	shellCount, err := strconv.Atoi(*parallelismFlag)
 	if err != nil {
-		log.Fatalf("error parsing parallelism: %v", err)
+		fmt.Printf("error parsing parallelism: %v\n", err)
 	}
 	if shellCount < 1 {
 		shellCount = 1
@@ -54,7 +44,7 @@ func main() {
 	}
 	c, err := winrm.NewClient(context.Background(), useTLS, *hostFlag, port, *userFlag, *passwordFlag, httpClient, &maxEnvelopeSize)
 	if err != nil {
-		log.Fatalf("error while initializing winrm client: %v", err)
+		fmt.Printf("error while initializing winrm client: %v\n", err)
 	}
 	shells := make([]*winrm.Shell, shellCount)
 	for i := 0; i < shellCount; i++ {
@@ -64,25 +54,17 @@ func main() {
 			for j := i; j > 0; j-- {
 				err2 := shells[j].Close()
 				if err2 != nil {
-					log.WithFields(log.Fields{
-						log.ErrorKey:          err2.Error(),
-						winrm.LogFieldShellID: shells[j].ID(),
-					}).Errorf("error while closing shell")
+					fmt.Printf("error while closing shell: %w", err2)
 				}
 			}
-			log.WithFields(log.Fields{
-				log.ErrorKey: err1.Error(),
-			}).Fatalf("error while creating remote shell")
+			fmt.Printf("error while creating remote shell: %w", err1)
 		}
 	}
 	defer func() {
 		for _, shell := range shells {
 			err := shell.Close()
 			if err != nil {
-				log.WithFields(log.Fields{
-					log.ErrorKey:          err.Error(),
-					winrm.LogFieldShellID: shell.ID(),
-				}).Errorf("error while closing shell")
+				fmt.Printf("error while closing shell: %w\n", err)
 			}
 		}
 	}()

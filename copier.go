@@ -125,7 +125,7 @@ func newCopyFileWorker(f *FileTreeCopier, id int, shell *Shell) *copyFileWorker 
 
 func (w *copyFileWorker) RunCommand(command string) error {
 	s := time.Now()
-	err := RunCommand(w.shell, command, nil, true, false)
+	_, _, err := RunCommand(w.shell, command, nil, true, false)
 	w.shellUseTime += time.Since(s)
 	return err
 }
@@ -197,7 +197,7 @@ func (f *FileTreeCopier) scanDirs() {
 						commandLength += copy(commandBuffer[commandLength:], command)
 						commandDirs++
 					} else {
-						err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
+						_, _, err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
 						if err != nil {
 							return err
 						}
@@ -239,7 +239,7 @@ func (f *FileTreeCopier) scanDirs() {
 		return
 	}
 	if commandLength > 0 {
-		err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
+		_, _, err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
 		if err != nil {
 			f.addError(err)
 			return

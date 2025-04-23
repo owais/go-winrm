@@ -5,10 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"os"
 	"strings"
-	"sync"
 	"unicode"
 	"unicode/utf16"
 )
@@ -86,51 +83,32 @@ func FormatPowerShellScriptCommandLine(script string) []string {
 // itself, to avoid leaking resources. Use (*Shell).StartCommand for a lower level alternative.
 // winrsConsoleModeStdin and winrsSkipCmdShell correspond to the SOAP options WINRS_CONSOLEMODE_STDIN and WINRS_SKIP_CMD_SHELL, respectively,
 // and are defined here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wsmv/c793e333-c409-43c6-a2eb-6ae2489c7ef4
-func RunCommand(shell *Shell, command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool) error {
+func RunCommand(shell *Shell, command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool) (string, string, error) {
 	if shell == nil {
-		return fmt.Errorf("shell cannot be nil")
+		return "", "", fmt.Errorf("shell cannot be nil")
 	}
 	cmd, err := shell.StartCommand(command, args, winrsConsoleModeStdin, winrsSkipCmdShell)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	defer cmd.Signal()
-	var wg sync.WaitGroup
-	wg.Add(2)
-	var firstErr error
-	var firstErrMutex sync.Mutex
-	addError := func(err error) {
-		firstErrMutex.Lock()
-		if firstErr == nil {
-			firstErr = err
-			firstErrMutex.Unlock()
-		} else {
-			firstErrMutex.Unlock()
-		}
-	}
-	copyFunc := func(dst io.Writer, src io.Reader, name string) {
-		defer wg.Done()
-		_, err = io.Copy(dst, src)
-		if err != nil {
-			addError(fmt.Errorf("error while copying command's %s to own %s: %w", name, name, err))
-		}
-	}
-	go copyFunc(os.Stderr, cmd.Stderr, "stderr")
-	go copyFunc(os.Stdout, cmd.Stdout, "stdout")
+
 	cmd.Wait()
+
 	if cmd.ExitCode() != 0 {
-		addError(fmt.Errorf("command unexpectedly exited with code %d", cmd.ExitCode()))
+		err = fmt.Errorf("command unexpectedly exited with code %d", cmd.ExitCode())
 	}
-	wg.Wait()
-	return firstErr
+
+	return cmd.stdout.String(), cmd.stderr.String(), err
 }
 
 // MustRunCommand wraps a call to RunCommand. If RunCommand returns an error then MustRunCommand panics.
-func MustRunCommand(shell *Shell, command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool) {
-	err := RunCommand(shell, command, args, winrsConsoleModeStdin, winrsSkipCmdShell)
+func MustRunCommand(shell *Shell, command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool) (string, string) {
+	stdout, stderr, err := RunCommand(shell, command, args, winrsConsoleModeStdin, winrsSkipCmdShell)
 	if err != nil {
 		panic(fmt.Errorf("error while running command %+v: %v", append([]string{command}, args...), err))
 	}
+	return stdout, stderr
 }
 
 func formatBytes(bytes float64) string {

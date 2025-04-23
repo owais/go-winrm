@@ -294,6 +294,12 @@ func (c *commandReader) onFinalize() {
 	}
 }
 
+func (c *commandReader) String() string {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return string(c.buffer)
+}
+
 // Read writes up to len(p) bytes from the remote command's output stream (stdout or stderr) to p.
 // n is the number of bytes read. See io.Reader for more information on the contract.
 func (c *commandReader) Read(p []byte) (n int, err error) {

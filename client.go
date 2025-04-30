@@ -3,6 +3,7 @@ package winrm
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,9 +17,9 @@ import (
 	"unsafe"
 
 	"github.com/gofrs/uuid"
-	soap "github.com/jbrekelmans/go-winrm/soap"
 	zenwinrm "github.com/masterzen/winrm"
 	zensoap "github.com/masterzen/winrm/soap"
+	soap "github.com/owais/go-winrm/soap"
 )
 
 // MaxCommandLineSize is the maximum size of a command with zero additional arguments, in bytes.
@@ -290,7 +291,7 @@ func (c *commandReader) onFinalize() {
 	if c.err != nil {
 		err := c.err
 		c.err = nil
-		fmt.Println("reporting otherwise hidden error in finalizer of *commandReader: %w", err)
+		fmt.Println("reporting otherwise hidden error in finalizer of *commandReader: %s", err)
 	}
 }
 
@@ -327,17 +328,18 @@ func (c *commandReader) Read(p []byte) (n int, err error) {
 	}
 }
 
-func (c *commandReader) Write(p []byte) {
+func (c *commandReader) Write(p []byte) (n int, err error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.isEOF {
-		panic("(*commandReader).Write after close")
+		return 0, errors.New("(*commandReader).Write after close")
 	}
 	if len(p) == 0 {
-		return
+		return 0, nil
 	}
 	c.buffer = append(c.buffer, p...)
 	c.hasData.Signal()
+	return len(p), nil
 }
 
 func (c *commandReader) Close(err error) bool {
@@ -359,7 +361,7 @@ type commandWriter struct {
 // StartCommand starts a command on the remote shell.
 // winrsConsoleModeStdin and winrsSkipCmdShell correspond to the SOAP options WINRS_CONSOLEMODE_STDIN and WINRS_SKIP_CMD_SHELL, respectively,
 // and are defined here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wsmv/c793e333-c409-43c6-a2eb-6ae2489c7ef4
-func (s *Shell) StartCommand(command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool) (*Command, error) {
+func (s *Shell) StartCommand(command string, args []string, winrsConsoleModeStdin, winrsSkipCmdShell bool, stdout io.ReadWriter, stderr io.ReadWriter) (*Command, error) {
 	messageID, err := uuid.NewV4()
 	if err != nil {
 		return nil, err
@@ -390,10 +392,8 @@ func (s *Shell) StartCommand(command string, args []string, winrsConsoleModeStdi
 		id:       commandID,
 		shell:    s,
 	}
-	cmd.stdout = newCommandReader()
-	cmd.Stdout = cmd.stdout
-	cmd.stderr = newCommandReader()
-	cmd.Stderr = cmd.stderr
+	cmd.stdout = stdout
+	cmd.stderr = stderr
 	return cmd, nil
 }
 
@@ -404,13 +404,9 @@ type Command struct {
 	exitCode   int64
 	id         string
 	shell      *Shell
-	stdout     *commandReader
-	stderr     *commandReader
+	stdout     io.ReadWriter
+	stderr     io.ReadWriter
 	stdin      *commandWriter
-	// Stdout is an io.Reader representing the remote command's stdout.
-	Stdout io.Reader
-	// Stderr is an io.Reader representing the remote command's stderr.
-	Stderr io.Reader
 }
 
 // SendInput copies bytes to the remote command's stdin. Set end to true to close the command process' stdin.
@@ -461,17 +457,21 @@ func (c *Command) Shell() *Shell {
 	return c.shell
 }
 
-func (c *Command) closeStdoutAndStderr(err error, logError bool) {
-	c.stdout.Close(err)
-	if !c.stderr.Close(err) && logError && err != nil {
-		// TODO: rework to surface the error in a more idiomatic way.
-		fmt.Printf("error while getting output of command: %w\n", err)
+func (c *Command) closeStdoutAndStderr(err error) {
+	if stdout, ok := c.stdout.(*commandReader); ok {
+		stdout.Close(err)
+	}
+	if stderr, ok := c.stderr.(*commandReader); ok {
+		if !stderr.Close(err) && err != nil {
+			// TODO: rework to surface the error in a more idiomatic way.
+			fmt.Printf("error while getting output of command: %s\n", err)
+		}
 	}
 }
 
-func (c *Command) completed(exitCode int, err error, logError bool) {
+func (c *Command) completed(exitCode int, err error) {
 	atomic.StoreInt64(&c.exitCode, int64(exitCode))
-	c.closeStdoutAndStderr(err, logError)
+	c.closeStdoutAndStderr(err)
 }
 
 func (c *Command) getOutputLoop() {
@@ -486,7 +486,7 @@ func (c *Command) getOutputLoop() {
 				continue
 			}
 			atomic.AddInt64(&c.errorCount, 1)
-			c.completed(16001, fmt.Errorf("error getting output of command %s: %w", c.id, err), true)
+			c.completed(16001, fmt.Errorf("error getting output of command %s: %w", c.id, err))
 			break
 		}
 		var stdout bytes.Buffer
@@ -496,17 +496,14 @@ func (c *Command) getOutputLoop() {
 		c.stderr.Write(stderr.Bytes())
 		c.stdout.Write(stdout.Bytes())
 		if ended {
-			logError := false
 			if err != nil {
 				atomic.AddInt64(&c.errorCount, 1)
 				err = fmt.Errorf("error parsing output response for command %s: %w", c.id, err)
 				if c.err == nil {
 					c.err = err
-				} else {
-					logError = true
 				}
 			}
-			c.completed(exitCode, err, logError)
+			c.completed(exitCode, err)
 			break
 		}
 		if err != nil {

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/jbrekelmans/go-winrm"
+	"github.com/owais/go-winrm"
 )
 
 const defaultParallelism = 1

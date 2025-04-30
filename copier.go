@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -125,7 +126,7 @@ func newCopyFileWorker(f *FileTreeCopier, id int, shell *Shell) *copyFileWorker 
 
 func (w *copyFileWorker) RunCommand(command string) error {
 	s := time.Now()
-	_, _, err := RunCommand(w.shell, command, nil, true, false)
+	err := RunCommand(w.shell, command, nil, true, false)
 	w.shellUseTime += time.Since(s)
 	return err
 }
@@ -197,7 +198,7 @@ func (f *FileTreeCopier) scanDirs() {
 						commandLength += copy(commandBuffer[commandLength:], command)
 						commandDirs++
 					} else {
-						_, _, err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
+						err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
 						if err != nil {
 							return err
 						}
@@ -239,7 +240,7 @@ func (f *FileTreeCopier) scanDirs() {
 		return
 	}
 	if commandLength > 0 {
-		_, _, err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
+		err := RunCommand(f.shells[0], string(commandBuffer[:commandLength]), nil, true, false)
 		if err != nil {
 			f.addError(err)
 			return
@@ -343,7 +344,9 @@ end {
 		}
 	}()
 	commandStartTime := time.Now()
-	cmd, err := w.shell.StartCommand(commandAndArgs[0], commandAndArgs[1:], false, true)
+	cmdOut := newCommandReader()
+	cmdErr := newCommandReader()
+	cmd, err := w.shell.StartCommand(commandAndArgs[0], commandAndArgs[1:], false, true, cmdOut, cmdErr)
 	if err != nil {
 		return err
 	}
@@ -416,16 +419,15 @@ end {
 	gotError := int64(0)
 	go func() {
 		defer wg.Done()
-		_, err = io.Copy(&stderr, cmd.Stderr)
+		_, err = io.Copy(&stderr, cmd.stderr)
 		if err != nil {
-			fmt.Printf("error while buffering stderr: %w - %s", err, stderr.String())
 			stderr.Reset()
 			atomic.StoreInt64(&gotError, 1)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(cmd.Stdout)
+		scanner := bufio.NewScanner(cmd.stdout)
 		for scanner.Scan() {
 			var output struct {
 				Sha256 string `json:"sha256"`
@@ -438,7 +440,6 @@ end {
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			fmt.Printf("error while buffering stdout: %w - %s", err, stdout.String())
 			stdout.Reset()
 			atomic.StoreInt64(&gotError, 1)
 		}
@@ -449,17 +450,20 @@ end {
 	}
 	wg.Wait()
 	w.shellUseTime += time.Since(commandStartTime)
+	var copyErr error
 	if cmd.ExitCode() == 0 {
 		if sha256DigestRemote == "" {
 			gotError = 1
+			copyErr = errors.New("copy file command did not output the expected JSON to stdout but exited with code 0")
 		} else if sha256DigestRemote != sha256DigestLocal {
 			gotError = 1
+			copyErr = errors.New("copy file command did not output the expected JSON to stdout but exited with code 0")
 		}
 	}
 	if gotError == 0 {
 		return nil
 	}
-	return fmt.Errorf("got errors while copying file (see logs)")
+	return fmt.Errorf("got errors while copying file: %w", copyErr)
 }
 
 func formatMakeDirectoryCommand(remoteFile string, checkIfExists bool) string {
